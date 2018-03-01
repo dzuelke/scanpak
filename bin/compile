@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+# bin/compile <build-dir> <cache-dir> <env-dir>
+
+# fail hard
+set -o pipefail
+# fail harder
+set -eu
+# move hidden files too, just in case
+shopt -s dotglob
+
+STACK=${STACK:-cedar-14} # Anvil has none
+build_dir=$1
+cache_dir=$2/scan
+env_dir=${3:-} # Anvil has none
+bp_dir=$(cd $(dirname $0); cd ..; pwd)
+
+# fetch list of current buildpacks from the 'cytokine run-buildpacks' invocation
+# they're passed as multiple --buildpack=... arguments to the above command
+# there are two entries, one for 'sh -c cytokine run-buildpacks ...' (as a wrapper), and one for the 'cytokine run-buildpacks ...' that that shell runs
+# we want the latter, as the former will have weird backslash escapes for #, =, and others, which are hard to undo
+packs=$(ps aux | grep -o -P "(?<!sh -c )cytokine run-buildpacks (.*)" | grep -o -E "http(s)?://\\S*")
+
+# nuke this dir, it's ours
+deps_dir=$build_dir/.heroku/dependencies
+rm -rf deps_dir
+mkdir -p deps_dir
+
+for pack in $packs; do
+	# codon hashes the buildpack names to generate a directory name
+	dir=$(echo -n "$pack" | shasum -a512 | cut -d" " -f1)
+	if [[ -f /app/tmp/buildpacks/$dir/bin/dependencies ]]; then
+		echo "-----> Dependency scan for $pack..."
+		# bin/dependencies is responsible for writing any number of files to a subdir of $deps_dir
+		/app/tmp/buildpacks/$dir/bin/dependencies $build_dir $deps_dir
+	fi
+done
